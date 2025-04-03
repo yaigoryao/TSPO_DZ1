@@ -1,413 +1,197 @@
-﻿#define NOMINMAX
-#include <iostream>
-
-#pragma once
-#include <iostream>
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <stdio.h>
-#include <thread>
-#include <map>
-#include <mutex>
-#include <set>
+﻿#include <iostream>
+#include <string>
+#include <cstring>
+#include <stdexcept>
 #include <fstream>
-#include <algorithm>
-#include <string>
-#include <iostream>
-#include <string>
-#include <vector>
-#include <map>
-#include <sstream>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
+#define BUFFER_SIZE 1024
+#define DEFAULT_PORT 33555
 
-#define DEFAULT_PORT "33555"
+class UDPServer {
+    int server_socket = -1;
+    struct sockaddr_in server_addr;
+    bool is_initialized = false;
 
-#pragma comment(lib, "Ws2_32.lib")
-class NoSockServer
-{
+    void initializeSocket()
+    {
+        server_socket = socket(AF_INET, SOCK_DGRAM, 0);
+        if (server_socket < 0) 
+        {
+            throw std::runtime_error("Socket creation error: " + std::string(strerror(errno)));
+        }
+
+        int optval = 1;
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))
+        {
+            close(server_socket);
+            throw std::runtime_error("Socket option error: " + std::string(strerror(errno)));
+        }
+    }
+
+    void bindSocket() 
+    {
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_addr.s_addr = INADDR_ANY;
+        server_addr.sin_port = htons(DEFAULT_PORT);
+
+        if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) 
+        {
+            close(server_socket);
+            throw std::runtime_error("Bind error: " + std::string(strerror(errno)));
+        }
+    }
+
+public:
+    UDPServer() 
+    {
+        try 
+        {
+            initializeSocket();
+            bindSocket();
+            is_initialized = true;
+            std::cout << "Server initialized on port " << DEFAULT_PORT << std::endl;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "Server initialization failed: " << e.what() << std::endl;
+            is_initialized = false;
+        }
+    }
+
+    ~UDPServer() 
+    {
+        if (server_socket >= 0) 
+        {
+            if (close(server_socket))
+            {
+                std::cerr << "Socket closure error: " << strerror(errno) << std::endl;
+            }
+        }
+    }
+
+    bool isInitialized() const 
+    {
+        return is_initialized;
+    }
+
+    void handle() 
+    {
+        if (!is_initialized) 
+        {
+            throw std::runtime_error("Server not initialized");
+        }
+
+        char buffer[BUFFER_SIZE];
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+
+        while (true) 
+        {
+            ssize_t bytes_received = recvfrom(
+                server_socket,
+                buffer,
+                BUFFER_SIZE,
+                0,
+                (struct sockaddr*)&client_addr,
+                &client_len
+            );
+
+            if (bytes_received < 0) 
+            {
+                std::cerr << "Receive error: " << strerror(errno) << std::endl;
+                continue;
+            }
+
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+            std::cout << "Received " << bytes_received << " bytes from " << client_ip << ":" << ntohs(client_addr.sin_port) << std::endl;
+
+            std::string request(buffer, bytes_received);
+            size_t delimiter_pos = request.find(';');
+            if (delimiter_pos == std::string::npos)
+            {
+                sendErrorResponse(client_addr, "Invalid message format: missing delimiter");
+                continue;
+            }
+
+            std::string file_path = request.substr(0, delimiter_pos);
+            std::string file_content = request.substr(delimiter_pos + 1);
+
+            if (saveToFile(file_path, file_content, client_addr)) 
+            {
+                sendResponse(client_addr, "File saved successfully");
+            }
+        }
+    }
+
 private:
-	static const int MinorVersion = 2;
-	static const int MajorVersion = 2;
-	static const int BufferSize = 512;
+    bool saveToFile(const std::string& path, const std::string& content, const sockaddr_in& client_addr) 
+    {
+        std::ofstream file("./" + path, std::ios::app);
+        if (!file.is_open()) 
+        {
+            sendErrorResponse(client_addr, "Failed to open file: " + path);
+            return false;
+        }
 
-	WSADATA _wsaData;
+        file << content;
+        file.close();
+        return true;
+    }
 
-	struct addrinfo* _result = nullptr;
-	struct addrinfo _hints;
+    void sendResponse(const sockaddr_in& client_addr, const std::string& message) 
+    {
+        sendToClient(client_addr, message);
+    }
 
-	SOCKET _listenSocket = INVALID_SOCKET;
+    void sendErrorResponse(const sockaddr_in& client_addr, const std::string& error)
+    {
+        std::cerr << "Error: " << error << std::endl;
+        sendToClient(client_addr, "[ERROR] " + error);
+    }
 
-	bool _initSuccessful = false;
+    void sendToClient(const sockaddr_in& client_addr, const std::string& message)
+    {
+        ssize_t bytes_sent = sendto(
+            server_socket,
+            message.c_str(),
+            message.size(),
+            0,
+            (struct sockaddr*)&client_addr,
+            sizeof(client_addr)
+        );
 
-	std::set<SOCKET> _clientSockets;
-	std::mutex _mutex;
-	std::atomic<bool> _stopMainLoop = false;
-
-	std::thread _mainThread;
-
-	bool initFields()
-	{
-		this->_clientSockets = std::set<SOCKET>();
-		return true;
-	}
-
-	/*bool initWinsock()
-	{
-		int status = WSAStartup(MAKEWORD(MajorVersion, MinorVersion), &_wsaData);
-		if (status != 0)
-		{
-			std::cout << "WSAStartup ошибка: " << status << std::endl;
-			return false;
-		}
-		std::cout << "WSA инициализирован" << std::endl;
-		return true;
-	}*/
-
-	bool initAddrInfo()
-	{
-		ZeroMemory(&_hints, sizeof(_hints));
-		_hints.ai_family = AF_INET;
-		_hints.ai_socktype = SOCK_DGRAM;
-		_hints.ai_flags = AI_PASSIVE;
-		_hints.ai_protocol = 0;
-		_hints.ai_canonname = NULL;
-		_hints.ai_addr = NULL;
-		_hints.ai_next = NULL;
-		int status = getaddrinfo("0.0.0.0", DEFAULT_PORT, &_hints, &_result);
-		if (status != 0)
-		{
-			std::cout << "getaddrinfo ошибка: " << status << std::endl;
-			WSACleanup();
-			return false;
-		}
-		std::cout << "Инициализация сервера с портом " << DEFAULT_PORT << "..." << std::endl;
-
-		return true;
-	}
-
-	bool initSocket()
-	{
-		_listenSocket = socket(_result->ai_family, _result->ai_socktype, _result->ai_protocol);
-		if (_listenSocket == INVALID_SOCKET)
-		{
-			std::cout << "Ошибка воздания сокета socket(): " << WSAGetLastError() << std::endl;
-			freeaddrinfo(_result);
-			WSACleanup();
-			return false;
-		}
-		std::cout << "Серверный сокет успешно инициализирован..." << std::endl;
-
-		return true;
-	}
-
-	bool bindSocket()
-	{
-		int status = bind(_listenSocket, _result->ai_addr, (int)_result->ai_addrlen);
-		if (status == SOCKET_ERROR)
-		{
-			std::cout << "Ошибка привязки сокета: " << WSAGetLastError() << std::endl;
-			freeaddrinfo(_result);
-			closesocket(_listenSocket);
-			WSACleanup();
-			return false;
-		}
-		freeaddrinfo(_result);
-		std::cout << "Сокет связан с портом..." << std::endl;
-
-		return true;
-	}
-
-	/*bool startListen()
-	{
-		if (listen(_listenSocket, SOMAXCONN) == SOCKET_ERROR)
-		{
-			std::cout << "Прослушка сокета прервалась: " << WSAGetLastError() << std::endl;
-			closesocket(_listenSocket);
-			WSACleanup();
-			return false;
-		}
-		std::cout << "Сокет начал прослушивание входящих соединений" << std::endl;
-
-		return true;
-	}*/
-
-	bool disconnectSocket()
-	{
-		_stopMainLoop = true;
-		if (closesocket(_listenSocket) != 0)
-		{
-			std::cout << "Ошибка закрытия сокета closesocket(): " << WSAGetLastError() << std::endl;
-			return false;
-		}
-		std::lock_guard<std::mutex> lock(_mutex);
-		for (SOCKET clientSocket : _clientSockets)
-		{
-			std::string shutdownMessage = "Остановка сервера...";
-			send(clientSocket, shutdownMessage.c_str(), shutdownMessage.length(), 0);
-			closesocket(clientSocket);
-		}
-		_clientSockets.clear();
-		WSACleanup();
-		std::cout << "Завершение работы..." << std::endl;
-
-		return true;
-	}
-
-public:
-	NoSockServer()
-	{
-		init();
-	}
-
-	NoSockServer(const NoSockServer&) = delete;
-	NoSockServer& operator=(const NoSockServer&) = delete;
-
-	NoSockServer(NoSockServer&&) noexcept = default;
-	NoSockServer& operator=(NoSockServer&&) noexcept = default;
-
-	void threadLoop()
-	{
-		while (!_stopMainLoop)
-		{
-			fd_set readSet;
-			FD_ZERO(&readSet);
-			FD_SET(_listenSocket, &readSet);
-
-			struct timeval timeout;
-			timeout.tv_sec = 1;
-			timeout.tv_usec = 0;
-
-			int result = select(0, &readSet, NULL, NULL, &timeout);
-
-			if (_stopMainLoop) break;
-
-			if (result > 0)
-			{
-				if (FD_ISSET(_listenSocket, &readSet))
-				{
-					SOCKET clientSocket = accept(_listenSocket, NULL, NULL);
-					if (clientSocket == INVALID_SOCKET)
-					{
-						std::cout << "Ошибка принятия данных accept(): " << WSAGetLastError() << std::endl;
-						continue;
-					}
-
-					std::lock_guard<std::mutex> lock(_mutex);
-					_clientSockets.insert(clientSocket);
-					std::cout << "Создание потока для обработки запроса..." << std::endl;
-					try
-					{
-						std::thread([this, clientSocket]()
-							{
-								std::cout << "Поток для обработки запроса запущен." << std::endl;
-								this->handleRequest(clientSocket);
-								std::lock_guard<std::mutex> lock(_mutex);
-								_clientSockets.erase(clientSocket);
-								std::cout << "Запрос обработан, сокет удален." << std::endl;
-							}).detach();
-						std::cout << "Поток был отделен." << std::endl;
-					}
-					catch (const std::exception& e)
-					{
-						std::cerr << "Ошибка при создании потока: " << e.what() << std::endl;
-					}
-				}
-			}
-			else if (result == 0)
-			{
-				if (_stopMainLoop) break;
-			}
-			else
-			{
-				std::cout << "Ошибка select(): " << WSAGetLastError() << std::endl;
-				break;
-			}
-		}
-		disconnectSocket();
-	}
-
-	//int totalFileBytesSend = 0;
-	//int previousPercentage = -1;
-	//totalFileBytesSend += bytesRead;
-//std::cout << "Считано: " << totalFileBytesSend << " байт из " << fileSize << std::endl;
-
-/*int percentage = static_cast<int>((static_cast<double>(totalFileBytesSend) * 100.0) / static_cast<double>(fileSize));
-if (percentage > previousPercentage)
-{
-	previousPercentage = percentage;
-	std::cout << "Отправлено: " << percentage << "%" << std::endl;
-}*/
-
-	void handleRequest(SOCKET clientSocket)
-	{
-		std::string request;
-		std::unique_ptr<char[]> requestBuffer(new char[BufferSize]);
-
-		while (true)
-		{
-			request.clear();
-			auto peer_addr_len = sizeof(struct sockaddr_storage);
-			int status = recvfrom(clientSocket, )
-				//int status = recv(clientSocket, requestBuffer.get(), BufferSize, 0);
-				if (status > 0)
-				{
-					request.append(requestBuffer.get(), status);
-					std::cout << "Принято байтов: " << request.length() << std::endl;
-
-					std::cout << "Запрос: " << std::endl;
-					std::cout << request << std::endl;
-
-					std::string filePath;
-					std::string fileData;
-					int delimiterPos = request.find(";");
-					filePath = request.substr(0, delimiterPos);
-					fileData = request.substr(delimiterPos + 1);
-
-					std::ofstream file("./" + filePath, std::ios_base::app);
-					if (!file.is_open())
-					{
-						std::string errorMessage = "Ошибка открытия файла!";
-						if (send(clientSocket, errorMessage.c_str(), errorMessage.size(), 0) == SOCKET_ERROR)
-						{
-							std::cerr << "Ошибка отправки данных: " << WSAGetLastError() << "\n";
-						}
-						continue;
-					}
-
-					file << fileData;
-
-					std::string response = "Файл успешно записан!";
-					if (send(clientSocket, response.c_str(), response.size(), 0) == SOCKET_ERROR)
-					{
-						std::cerr << "Ошибка отправки данных: " << WSAGetLastError() << "\n";
-						break;
-					}
-					file.close();
-				}
-
-				else if (status == 0)
-				{
-					std::cout << "Клиент закрыл соединение." << std::endl;
-					break;
-				}
-				else
-				{
-					std::cout << "Ошибка чтения данных: " << WSAGetLastError() << std::endl;
-					break;
-				}
-		}
-		closesocket(clientSocket);
-	}
-	/*std::string response = Router::getResponse(request, serverPrefix);
-	int sendStatus = send(clientSocket, response.c_str(), response.length(), 0);
-
-	if (sendStatus == SOCKET_ERROR)
-	{
-		std::cout << "Ошибка отправки: " << WSAGetLastError() << std::endl;
-		break;
-	}
-	else
-	{
-		std::cout << "Байтов отправлено: " << sendStatus << std::endl;
-	}
-
-	request.clear();*/
-	/*void handleRequest(SOCKET clientSocket)
-	{
-		std::string request;
-		std::unique_ptr<char[]> requestBuffer(new char[BufferSize]);
-
-		while (true)
-		{
-			int status = recv(clientSocket, requestBuffer.get(), BufferSize, 0);
-
-			if (status > 0)
-			{
-				request.append(requestBuffer.get(), status);
-				if (processAndReceiveRemainingBytes(clientSocket, request, status) >= 0)
-				{
-					std::cout << "Принято байтов: " << request.length() << std::endl;
-					std::string response = Router::getResponse(request, serverPrefix);
-					int sendStatus = send(clientSocket, response.c_str(), response.length(), 0);
-
-					if (sendStatus == SOCKET_ERROR)
-					{
-						std::cout << "Ошибка отправки: " << WSAGetLastError() << std::endl;
-						break;
-					}
-					else
-					{
-						std::cout << "Байтов отправлено: " << sendStatus << std::endl;
-					}
-
-					request.clear();
-				}
-				else
-				{
-					std::cout << "Ошибка чтения данных: " << WSAGetLastError() << std::endl;
-				}
-			}
-			else if (status == 0)
-			{
-				std::cout << "Клиент закрыл соединение." << std::endl;
-				break;
-			}
-			else
-			{
-				std::cout << "Ошибка чтения данных: " << WSAGetLastError() << std::endl;
-				break;
-			}
-		}
-		closesocket(clientSocket);
-	}*/
-
-	void init()
-	{
-		if (!_initSuccessful)
-		{
-			_initSuccessful =
-				initFields() &&
-				/*initWinsock() && */
-				initAddrInfo() &&
-				initSocket() &&
-				bindSocket();
-			/*&& startListen();*/
-		}
-	}
-
-	void startMainLoop()
-	{
-		_stopMainLoop = false;
-		_mainThread = std::thread([this]() { this->threadLoop(); });
-	}
-
-	void stopMainLoop()
-	{
-		_stopMainLoop = true;
-		if (_mainThread.joinable()) _mainThread.join();
-	}
-
-	~NoSockServer()
-	{
-		//disconnectSocket();
-	}
-public:
-	static inline const std::string serverPrefix = "server";
+        if (bytes_sent < 0) 
+        {
+            std::cerr << "Send error: " << strerror(errno) << std::endl;
+        }
+    }
 };
 
 int main()
 {
-    setlocale(LC_ALL, "");
-    NoSockServer server;
-    server.startMainLoop();
-    printf("Введите '0' для остановки сервера\n");
-    while (true)
+    try 
     {
-        if ((char)getchar() == '0')
+        UDPServer server;
+
+        if (!server.isInitialized()) 
         {
-            server.stopMainLoop();
-            break;
+            return EXIT_FAILURE;
         }
+
+        server.handle();
+
     }
+    catch (const std::exception& e) 
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
