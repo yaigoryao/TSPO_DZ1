@@ -133,7 +133,7 @@ public:
 private:
     bool saveToFile(const std::string& path, const std::string& content, const sockaddr_in& client_addr) 
     {
-        std::ofstream file("./" + path, std::ios::app);
+        std::ofstream file("./" + path, std::ios::out);
         if (!file.is_open()) 
         {
             sendErrorResponse(client_addr, "Failed to open file: " + path);

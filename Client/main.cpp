@@ -271,33 +271,42 @@ int main(int argc, char* argv[])
         }
         
         bool run = true;
-        while (true)
-        {
-            std::cout << "[1] Input coefficients from keyboard and send solution\n[2] Read coefficients and send solution\n[3] Exit" << std::endl;
-            char input = getchar();
-            const std::string message = "";
-            QuadraticCoefficients coeffs;
+        while (true) {
+            std::cout << "[1] Input from keyboard\n[2] Read from file\n[3] Exit" << std::endl;
+            char input;
+            std::cin >> input;
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
-            switch (input)
+            QuadraticCoefficients coeffs;
+            std::string response;
+
+            switch (input) 
             {
-                case '1':
-                    coeffs = readFromKeyboard();
-                    break;
-                case '2':
-                    coeffs = readFromFile("equation.txt");
-                    break;
-                case '3':
-                    run = false;
-                    break;
-                default:
-                    std::cout << "Wrong command!" << std::endl;
+            case '1': {
+                coeffs = readFromKeyboard();
+                
+                break;
             }
+            case '2':
+            {
+                std::cout << "Enter file name to read coefficients from: ";
+                std::string fileName;
+                std::getline(std::cin, fileName);
+                coeffs = readFromFile(fileName);
+                break;
+            }
+            case '3':
+                run = false;
+                break;
+            default:
+                std::cout << "Wrong command!" << std::endl;
+            }
+
             if (!run) break;
-            std::cout << "Enter file name: ";
-            std::string fileName = "";
+            std::string fileName;
             std::getline(std::cin, fileName);
             std::string result = solveQuadratic(coeffs);
-            std::string response = client.sendAndReceive(fileName + ";" + message);
+            response = client.sendAndReceive(fileName + ";" + result);
             std::cout << "Server response: " << response << std::endl;
         }
         
