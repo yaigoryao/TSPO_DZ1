@@ -135,16 +135,26 @@ struct QuadraticCoefficients
     double c = 0.0;
 };
 
-QuadraticCoefficients readFromKeyboard() 
+void safeInput(double& value, const std::string& prompt) 
 {
-    QuadraticCoefficients coeffs;
-    std::cout << "Enter coefficients a, b, c: ";
-    while (!(std::cin >> coeffs.a >> coeffs.b >> coeffs.c))
+    while (true) 
     {
+        std::cout << prompt;
+        if (std::cin >> value) break;
+
         std::cin.clear();
         std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        std::cout << "Invalid input. Please enter numbers: ";
+        std::cout << "Invalid input. Please enter a number.\n";
     }
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+}
+
+QuadraticCoefficients readFromKeyboard()
+{
+    QuadraticCoefficients coeffs;
+    safeInput(coeffs.a, "Enter coefficient a: ");
+    safeInput(coeffs.b, "Enter coefficient b: ");
+    safeInput(coeffs.c, "Enter coefficient c: ");
     return coeffs;
 }
 
@@ -271,44 +281,58 @@ int main(int argc, char* argv[])
         }
         
         bool run = true;
-        while (true) {
-            std::cout << "[1] Input from keyboard\n[2] Read from file\n[3] Exit" << std::endl;
-            char input;
-            std::cin >> input;
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::string input_line;
+        while (run)
+        {
+            std::cout << "\nMenu:\n"
+                << "1. Input coefficients from keyboard\n"
+                << "2. Read coefficients from file\n"
+                << "3. Exit\n"
+                << "Your choice: ";
+
+            std::getline(std::cin, input_line);
+
+            if (input_line.empty()) continue;
 
             QuadraticCoefficients coeffs;
             std::string response;
+            std::string server_filename;
 
-            switch (input) 
-            {
+            switch (input_line[0]) {
             case '1': {
                 coeffs = readFromKeyboard();
-                
+
+                std::cout << "Enter server filename: ";
+                std::getline(std::cin, server_filename);
+
+                std::string result = solveQuadratic(coeffs);
+                response = client.sendAndReceive(server_filename + ";" + result);
                 break;
             }
-            case '2':
-            {
-                std::cout << "Enter file name to read coefficients from: ";
-                std::string fileName;
-                std::getline(std::cin, fileName);
-                coeffs = readFromFile(fileName);
+            case '2': {
+                std::cout << "Enter input filename: ";
+                std::string input_filename;
+                std::getline(std::cin, input_filename);
+
+                coeffs = readFromFile(input_filename);
+
+                std::cout << "Enter server filename: ";
+                std::getline(std::cin, server_filename);
+
+                std::string result = solveQuadratic(coeffs);
+                response = client.sendAndReceive(server_filename + ";" + result);
                 break;
             }
             case '3':
                 run = false;
                 break;
             default:
-                std::cout << "Wrong command!" << std::endl;
+                std::cout << "Invalid choice!\n";
+                continue;
             }
 
             if (!run) break;
-            std::string fileName;
-            std::cout << "Enter file name to save on server: ";
-            std::getline(std::cin, fileName);
-            std::string result = solveQuadratic(coeffs);
-            response = client.sendAndReceive(fileName + ";" + result);
-            std::cout << "Server response: " << response << std::endl;
+            std::cout << "\nServer response: " << response << "\n";
         }
         
     }
