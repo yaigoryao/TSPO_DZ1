@@ -1,15 +1,15 @@
 ﻿#pragma once
 #include <iostream>
 #include <sstream>
-#include <string>
+#include <string.h>
 #include <stdio.h>
 #include <fstream>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <memory>
 
-#define DEFAULT_PORT "33555"
+#define DEFAULT_PORT 33555
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -18,115 +18,34 @@ class NoSockClient
 private:
 	static const int MinorVersion = 2;
 	static const int MajorVersion = 2;
-
-	WSADATA _wsaData;
-
-	struct addrinfo* _result = nullptr;
-	struct addrinfo _hints;
-
-	SOCKET _connectSocket = INVALID_SOCKET;
+	static const int BufferSize = 1024;
 
 	bool _initSuccessful = false;
 
-	std::string serverName;
+	std::string serverAddress;
+	struct sockaddr_in peer_addr;
+	int udp_socket;
 
-	bool initWinsock()
+	bool getAddrInfo()
 	{
-		int status = WSAStartup(MAKEWORD(MajorVersion, MinorVersion), &_wsaData);
-		if (status != 0)
+		peer_addr.sin_family = AF_INET;
+		peer_addr.sin_port = htons(DEFAULT_PORT);
+		if (inet_pton(AF_INET, serverAddress.c_str(), &(peer_addr.sin_addr)) < 0)
 		{
-			std::cout << "WSAStartup ошибка: " << status << std::endl;
+			perror("Error while receiving connection data");
 			return false;
 		}
-		std::cout << "WSA инициализирован" << std::endl;
-
 		return true;
-	}
-
-	bool initAddrInfo()
-	{
-		ZeroMemory(&_hints, sizeof(_hints));
-		_hints.ai_family = AF_INET;
-		_hints.ai_socktype = SOCK_STREAM;
-		_hints.ai_protocol = IPPROTO_TCP;
-
-		//int status = getaddrinfo(Config::getInstance()->getLocalAddress().c_str(), std::to_string(Config::getInstance()->getServerPort()).c_str(), &_hints, &_result);
-		std::pair<std::string, int> serverAddress;
-		try
-		{
-			//serverAddress = DNSResolver::resolve(serverName);
-			//int status = getaddrinfo(serverAddress.first.c_str(), std::to_string(serverAddress.second).c_str(), &_hints, &_result);
-			int status = getaddrinfo(serverName.c_str(), DEFAULT_PORT, &_hints, &_result);
-			if (status != 0)
-			{
-				std::cout << "getaddrinfo ошибка: " << status << std::endl;
-				WSACleanup();
-				return false;
-			}
-			std::cout << "Подключение к серверу " << serverName << "..." << std::endl;
-			return true;
-		}
-		catch (...)
-		{
-			std::cout << "Ошибка! Не удалось разрешить имя сервера..." << std::endl;
-			WSACleanup();
-			return false;
-		}
 	}
 
 	bool initSocket()
 	{
-		_connectSocket = socket(_result->ai_family, _result->ai_socktype, _result->ai_protocol);
-		if (_connectSocket == INVALID_SOCKET)
+		udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+		if (udp_socket < 0)
 		{
-			std::cout << "Ошибка создания сокета socket(): " << WSAGetLastError() << std::endl;
-			freeaddrinfo(_result);
-			WSACleanup();
+			perror("Error while initializing socket");
 			return false;
 		}
-		std::cout << "Клиентский сокет успешно инициализирован..." << std::endl;
-
-		return true;
-	}
-
-	bool connectToSocket()
-	{
-		int status = connect(_connectSocket, _result->ai_addr, (int)_result->ai_addrlen);
-		if (status == SOCKET_ERROR)
-		{
-			closesocket(_connectSocket);
-			_connectSocket = INVALID_SOCKET;
-		}
-		freeaddrinfo(_result);
-
-		if (_connectSocket == INVALID_SOCKET)
-		{
-			std::cout << "Невозможно подключиться к серверу" << std::endl;
-			WSACleanup();
-			return false;
-		}
-		std::cout << "Успешное подключение к серверу" << std::endl;
-
-		return true;
-	}
-
-	bool disconnectSocket()
-	{
-		if (_connectSocket != INVALID_SOCKET)
-		{
-			int status = shutdown(_connectSocket, SD_SEND);
-			if (status == SOCKET_ERROR)  return false;
-		}
-		std::cout << "Окончание работы..." << std::endl;
-
-		return true;
-	}
-
-	bool closeConnection()
-	{
-		if (_connectSocket != INVALID_SOCKET) closesocket(_connectSocket);
-		WSACleanup();
-		std::cout << "Все ресурсы освобождены" << std::endl;
 		return true;
 	}
 
@@ -134,18 +53,14 @@ private:
 	{
 		if (!_initSuccessful)
 		{
-			_initSuccessful =
-				initWinsock() &&
-				initAddrInfo() &&
-				initSocket() &&
-				connectToSocket();
+			_initSuccessful = getAddrInfo() && initSocket();
 		}
 	}
 
 public:
-	NoSockClient(const std::string& serverName)
+	NoSockClient(const std::string& serverAddress)
 	{
-		this->serverName = serverName;
+		this->serverAddress = serverAddress;
 		init();
 	}
 
@@ -153,20 +68,19 @@ public:
 
 	std::string write(const std::string& message, const std::string& filePath)
 	{
-		if (!_initSuccessful) throw std::runtime_error("Клиент некорректно инициализирован!");
+		if (!_initSuccessful) throw std::runtime_error("Error initializing client!");
 		std::unique_ptr<char[]> responseBuffer(new char[BufferSize]);
 		std::string request = filePath + ";\n" + message;
 		std::string response = "";
-		int status = send(_connectSocket, request.c_str(), request.length(), 0);
-		if (status == SOCKET_ERROR)
+		int status = sendto(udp_socket, request.length(), 0, (struct sockaddr*) & peer_addr, sizeof(peer_addr));
+		if (status < 0)
 		{
-			std::cout << "Ошибка отправки: " << WSAGetLastError() << std::endl;
-			closesocket(_connectSocket);
-			WSACleanup();
+			std::cout << "Failed to send a message!" << std::endl;
+			
 			return std::string("");
 		}
 
-		std::cout << "Отправлено байтов: " << status << std::endl;
+		std::cout << "Bytes send: " << status << std::endl;
 		status = recv(_connectSocket, responseBuffer.get(), BufferSize, 0);
 		if (status > 0)
 		{
@@ -176,25 +90,19 @@ public:
 		}
 		else if (status == 0)
 		{
-			std::cout << "Закрытие соединения" << std::endl;
+			std::cout << "Closing connection..." << std::endl;
 		}
 		else
 		{
-			std::cout << "Ошибка принятия recv(): " << WSAGetLastError() << std::endl;
+			std::cout << "recv() error!" << std::endl;
 		}
 		return response;
 	}
 
 	~NoSockClient()
 	{
-		if (!disconnectSocket())
-		{
-			std::cout << "Ошибка завершеня работы shutdown(): " << WSAGetLastError() << std::endl;
-		}
-		else
-		{
-			closeConnection();
-		}
+		std::cout << "Closing socket..." << std::endl;
+		close(udp_socket);
 	}
 };
 
