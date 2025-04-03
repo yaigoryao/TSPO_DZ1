@@ -293,8 +293,11 @@ int main(int argc, char* argv[])
                     std::cout << "Wrong command!" << std::endl;
             }
             if (!run) break;
+            std::cout << "Enter file name: ";
+            std::string fileName = "";
+            std::getline(std::cin, fileName);
             std::string result = solveQuadratic(coeffs);
-            std::string response = client.sendAndReceive(message);
+            std::string response = client.sendAndReceive(fileName + ";" + message);
             std::cout << "Server response: " << response << std::endl;
         }
         
