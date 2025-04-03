@@ -25,7 +25,7 @@ class UDPServer {
         }
 
         int optval = 1;
-        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval))
+        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)))
         {
             close(server_socket);
             throw std::runtime_error("Socket option error: " + std::string(strerror(errno)));
