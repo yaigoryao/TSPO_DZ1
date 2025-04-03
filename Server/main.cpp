@@ -11,7 +11,8 @@
 #define BUFFER_SIZE 1024
 #define DEFAULT_PORT 33555
 
-class UDPServer {
+class UDPServer 
+{
     int server_socket = -1;
     struct sockaddr_in server_addr;
     bool is_initialized = false;

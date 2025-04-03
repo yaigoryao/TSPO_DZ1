@@ -121,22 +121,31 @@ public:
     }
 };
 
-int main() 
+int main(int argc, char* argv[]) 
 {
-    try
+    try 
     {
-        UDPClient client("127.0.0.1");
+        if (argc < 2)
+        {
+            std::cerr << "Usage: " << argv[0] << " <server_ip>" << std::endl;
+            std::cerr << "Example: " << argv[0] << " 192.168.1.100" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-        if (!client.isInitialized()) 
+        const std::string server_ip(argv[1]);
+        const std::string message = "Hello, Server!";
+
+        UDPClient client(server_ip);
+
+        if (!client.isInitialized())
         {
             return EXIT_FAILURE;
         }
 
-        std::string response = client.sendAndReceive("Hello, Server!");
+        std::string response = client.sendAndReceive(message);
         std::cout << "Server response: " << response << std::endl;
-
     }
-    catch (const std::exception& e)
+    catch (const std::exception& e) 
     {
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
