@@ -6,6 +6,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <math.h>
+#include <fstream>
+#include <cmath>
+#include <sstream>
+#include <limits>
+#include <iomanip>
 
 #define BUFFER_SIZE 1024
 #define DEFAULT_PORT 33555
@@ -121,6 +127,129 @@ public:
     }
 };
 
+
+struct QuadraticCoefficients 
+{
+    double a = 0.0;
+    double b = 0.0;
+    double c = 0.0;
+};
+
+QuadraticCoefficients readFromKeyboard() 
+{
+    QuadraticCoefficients coeffs;
+    std::cout << "Enter coefficients a, b, c: ";
+    while (!(std::cin >> coeffs.a >> coeffs.b >> coeffs.c))
+    {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cout << "Invalid input. Please enter numbers: ";
+    }
+    return coeffs;
+}
+
+QuadraticCoefficients readFromFile(const std::string& filename) 
+{
+    QuadraticCoefficients coeffs;
+    std::ifstream file(filename);
+    if (file >> coeffs.a >> coeffs.b >> coeffs.c) 
+    {
+        return coeffs;
+    }
+    throw std::runtime_error("Error reading coefficients from file");
+}
+
+struct Solution
+{
+    bool is_linear = false;
+    bool no_solution = false;
+    bool infinite_solutions = false;
+    double roots[2];
+    int num_roots = 0;
+};
+
+Solution solveQuadraticImpl(const QuadraticCoefficients& coeffs)
+{
+    Solution sol;
+    const double eps = 1e-9;
+    double a = coeffs.a;
+    double b = coeffs.b;
+    double c = coeffs.c;
+
+    if (fabs(a) < eps) 
+    {
+        sol.is_linear = true;
+        if (fabs(b) < eps)
+        {
+            if (fabs(c) < eps) 
+            {
+                sol.infinite_solutions = true;
+            }
+            else 
+            {
+                sol.no_solution = true;
+            }
+        }
+        else 
+        {
+            sol.roots[0] = -c / b;
+            sol.num_roots = 1;
+        }
+        return sol;
+    }
+
+    double d = b * b - 4 * a * c;
+    if (d < -eps) 
+    {
+        sol.no_solution = true;
+    }
+    else 
+    {
+        double sqrt_d = sqrt(fabs(d));
+        if (d < eps) 
+        { 
+            sol.roots[0] = -b / (2 * a);
+            sol.num_roots = 1;
+        }
+        else 
+        { 
+            sol.roots[0] = (-b - sqrt_d) / (2 * a);
+            sol.roots[1] = (-b + sqrt_d) / (2 * a);
+            sol.num_roots = 2;
+        }
+    }
+    return sol;
+}
+
+std::string solveQuadratic(QuadraticCoefficients coeffs) 
+{
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(3);
+
+    Solution sol = solveQuadraticImpl(coeffs);
+
+    if (sol.infinite_solutions) return "Infinite solutions";
+    if (sol.no_solution) return "No real solutions";
+
+    if (sol.is_linear) 
+    {
+        oss << "x = " << sol.roots[0];
+        return oss.str();
+    }
+
+    switch (sol.num_roots) 
+    {
+    case 1:
+        oss << "x = " << sol.roots[0] << " (double root)";
+        break;
+    case 2:
+        oss << "x1 = " << sol.roots[0] << "; x2 = " << sol.roots[1];
+        break;
+    }
+    return oss.str();
+}
+
+
 int main(int argc, char* argv[]) 
 {
     try 
@@ -133,7 +262,6 @@ int main(int argc, char* argv[])
         }
 
         const std::string server_ip(argv[1]);
-        const std::string message = "Hello, Server!";
 
         UDPClient client(server_ip);
 
@@ -141,9 +269,35 @@ int main(int argc, char* argv[])
         {
             return EXIT_FAILURE;
         }
+        
+        bool run = true;
+        while (true)
+        {
+            std::cout << "[1] Input coefficients from keyboard and send solution\n[2] Read coefficients and send solution\n[3] Exit" << std::endl;
+            char input = getchar();
+            const std::string message = "";
+            QuadraticCoefficients coeffs;
 
-        std::string response = client.sendAndReceive(message);
-        std::cout << "Server response: " << response << std::endl;
+            switch (input)
+            {
+                case '1':
+                    coeffs = readFromKeyboard();
+                    break;
+                case '2':
+                    coeffs = readFromFile("equation.txt");
+                    break;
+                case '3':
+                    run = false;
+                    break;
+                default:
+                    std::cout << "Wrong command!" << std::endl;
+            }
+            if (!run) break;
+            std::string result = solveQuadratic(coeffs);
+            std::string response = client.sendAndReceive(message);
+            std::cout << "Server response: " << response << std::endl;
+        }
+        
     }
     catch (const std::exception& e) 
     {
