@@ -304,6 +304,7 @@ int main(int argc, char* argv[])
 
             if (!run) break;
             std::string fileName;
+            std::cout << "Enter file name to save on server: ";
             std::getline(std::cin, fileName);
             std::string result = solveQuadratic(coeffs);
             response = client.sendAndReceive(fileName + ";" + result);
